@@ -1,4 +1,4 @@
-require("dotenv").config();  // ✅ Load environment variables at the start
+require("dotenv").config();  
 const express = require("express");
 const mongoose = require("mongoose");
 const cors = require("cors");
@@ -10,6 +10,8 @@ require("dotenv").config();
 const { v4: uuidv4 } = require("uuid"); // ✅ Correct import
 const multer = require("multer");
 const path = require("path");
+const bodyParser = require("body-parser");
+const nodemailer = require("nodemailer");
 
 
 
@@ -19,13 +21,12 @@ const app = express();
 // Middleware
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
+app.use(cors());
 // app.use(cors({ origin: "http://localhost:3000" }));
 // (Note: express.json() is built-in so you don't need bodyParser.json())
 
-app.use(cors());
 
-// ✅ Debug: Print the environment variable
-console.log("🔍 MongoDB URI:", process.env.MONGODB_URI);
+console.log("✅ MongoDB URI:", process.env.MONGODB_URI);
 
 if (!process.env.MONGODB_URI) {
   console.error("❌ ERROR: MONGODB_URI is not defined. Check your .env file!");
@@ -173,74 +174,65 @@ app.post("/save-step", upload.single("file"), async (req, res) => {
 
 app.post("/create-new-from-existing", upload.single("file"), async (req, res) => {
   try {
-      console.log("🔹 Incoming Request to /create-new-from-existing:", req.body);
+    console.log("🔹 Incoming Request:", req.body);
 
-      if (!req.body.data) {
-          return res.status(400).json({ message: "Missing data in request body" });
-      }
+    if (!req.body.data) {
+      console.error("❌ Missing 'data' in request body");
+      return res.status(400).json({ message: "Missing 'data' in request body" });
+    }
 
-      let newData;
-      try {
-          newData = JSON.parse(req.body.data);
-      } catch (jsonError) {
-          console.error("🔥 JSON Parsing Error:", jsonError);
-          return res.status(400).json({ message: "Invalid JSON format", error: jsonError.message });
-      }
+    let newData;
+    try {
+      newData = JSON.parse(req.body.data);
+    } catch (jsonError) {
+      console.error("🔥 JSON Parsing Error:", jsonError);
+      return res.status(400).json({ message: "Invalid JSON format", error: jsonError.message });
+    }
 
-      console.log("📌 Parsed Data Before File Processing:", newData);
+    console.log("📌 Parsed Data:", newData);
 
-      // ✅ Ensure `AccountInformation` exists
-      if (!newData.AccountInformation) {
-          newData.AccountInformation = {};
-      }
+    // ✅ Remove `_id` from newData before updating
+    if (newData._id) {
+      console.log("🗑 Removing _id before updating:", newData._id);
+      delete newData._id;
+    }
 
-      // ✅ Handle file upload
-      if (req.file) {
-          console.log("📂 File Uploaded:", req.file);
-          newData.AccountInformation.logoOfBusiness = `/uploads/${req.file.filename}`;
-      }
-
-      let sessionToUse = newData.sessionId;
-
-      if (sessionToUse) {
-          // ✅ If sessionId exists, update the existing document
-          console.log("🔄 Updating existing document for sessionId:", sessionToUse);
-
-          const updatedForm = await FormData.findOneAndUpdate(
-              { sessionId: sessionToUse },
-              { $set: newData },
-              { new: true, upsert: false }
-          );
-
-          if (!updatedForm) {
-              return res.status(404).json({ message: "Session ID not found" });
-          }
-
-          return res.status(200).json({
-              message: "Data updated successfully",
-              sessionId: sessionToUse,
-              filePath: newData.AccountInformation.logoOfBusiness || null,
-          });
-      }
-
-      // ✅ If no sessionId, create a new document (only for Step 1)
+    if (!newData.sessionId) {
+      console.log("🆕 Creating a New Document...");
       const newSessionId = uuidv4();
-      console.log("🆕 Creating a New Report with sessionId:", newSessionId);
+      newData.sessionId = newSessionId;
 
-      const newForm = new FormData({ sessionId: newSessionId, ...newData });
-
-      await newForm.save();
-      console.log("✅ New Document Saved Successfully:", newSessionId);
+      const newForm = await FormData.create(newData);
+      console.log("✅ New Document Created:", newSessionId);
 
       return res.status(201).json({
-          message: "New report created successfully",
-          sessionId: newSessionId, // ✅ Return sessionId so frontend can store it
-          filePath: newData.AccountInformation.logoOfBusiness || null,
+        message: "New report created successfully",
+        sessionId: newSessionId,
       });
+    } else {
+      console.log("🔄 Updating Existing Document:", newData.sessionId);
 
+      const updatedForm = await FormData.findOneAndUpdate(
+        { sessionId: newData.sessionId }, // Find by sessionId
+        { $set: newData }, // ✅ Update only safe fields (without _id)
+        { new: true }
+      );
+
+      if (!updatedForm) {
+        console.error("❌ Document Not Found for Update");
+        return res.status(404).json({ message: "Document not found" });
+      }
+
+      console.log("✅ Document Updated:", updatedForm.sessionId);
+
+      return res.status(200).json({
+        message: "Report updated successfully",
+        sessionId: updatedForm.sessionId,
+      });
+    }
   } catch (error) {
-      console.error("🔥 Error in /create-new-from-existing API:", error);
-      return res.status(500).json({ message: "Internal Server Error", error: error.message });
+    console.error("🔥 Server Error:", error);
+    return res.status(500).json({ message: "Internal Server Error", error: error.message });
   }
 });
 
@@ -369,245 +361,6 @@ app.post("/update-step", async (req, res) => {
   }
 });
 
-//new api with image upload
-
-// app.post("/save-step", upload.single("file"), async (req, res) => {
-//   try {
-//     console.log("🔹 Incoming Request to /save-step:", req.body);
-
-//     const { sessionId, step, data } = req.body;
-//     let updateData;
-
-//     try {
-//       updateData = data ? JSON.parse(data) : {};
-//     } catch (jsonError) {
-//       console.error("🔥 JSON Parsing Error:", jsonError);
-//       return res.status(400).json({ message: "Invalid JSON data", error: jsonError.message });
-//     }
-
-//     console.log("📌 Parsed Data:", updateData);
-
-//     if (req.file) {
-//       console.log("📂 File Uploaded:", req.file);
-//       const filePath = `/uploads/${req.file.filename}`;
-      
-//       if (!updateData.AccountInformation) updateData.AccountInformation = {};
-//       updateData.AccountInformation.logoOfBusiness = filePath;
-//     }
-
-//     if (!sessionId) {
-//       console.log("🆕 Creating New Report...");
-//       const newSessionId = uuidv4();
-//       const newForm = new FormData({ sessionId: newSessionId, ...updateData });
-
-//       await newForm.save();
-
-//       return res.status(201).json({
-//         message: "New report created successfully",
-//         sessionId: newSessionId,
-//         filePath: updateData?.AccountInformation?.logoOfBusiness || null,
-//       });
-//     }
-
-//     console.log("🔄 Updating Existing Report for sessionId:", sessionId);
-
-//     const updatedForm = await FormData.findOneAndUpdate(
-//       { sessionId },
-//       { $set: updateData },
-//       { new: true, upsert: false }
-//     );
-
-//     if (!updatedForm) {
-//       console.error("❌ Session ID not found:", sessionId);
-//       return res.status(404).json({ message: "Session ID not found" });
-//     }
-
-//     console.log("✅ Data Updated Successfully:", updatedForm);
-//     return res.status(200).json({ message: "Data updated successfully", filePath: updateData?.AccountInformation?.logoOfBusiness || null });
-
-//   } catch (error) {
-//     console.error("🔥 Error in /save-step API:", error);
-//     return res.status(500).json({ message: "Internal Server Error", error: error.message });
-//   }
-// });
-
-
-
-
-
-// app.post("/save-step", async (req, res) => {
-//   const { sessionId, step, data } = req.body;
-
-//   try {
-//     console.log("Incoming Request to /save-step:", { sessionId, step, data });
-
-//     if (!sessionId) {
-//       // ✅ Remove `sessionId` if it exists in data
-//       if (data._id) {
-//         delete data._id;
-//       }
-//       if (data.sessionId) {
-//         delete data.sessionId;
-//       }
-
-//       // ✅ Create a New Document
-//       const newSessionId = uuidv4();
-//       const newForm = new FormData({ sessionId: newSessionId, ...data });
-
-//       await newForm.save(); // ✅ Ensure this operation completes
-
-//       console.log("✅ New document successfully created with sessionId:", newSessionId);
-      
-//       return res.status(201).json({
-//         message: "New report created successfully",
-//         sessionId: newSessionId,
-//       });
-//     }
-
-//     // ✅ Update Existing Document
-//     const updatedForm = await FormData.findOneAndUpdate(
-//       { sessionId },
-//       { $set: data },
-//       { new: true, upsert: false }
-//     );
-
-//     if (!updatedForm) {
-//       console.error("❌ Session ID not found:", sessionId);
-//       return res.status(404).json({ message: "Session ID not found" });
-//     }
-
-//     console.log("✅ Existing document successfully updated:", updatedForm);
-    
-//     return res.status(200).json({ message: "Data updated successfully" });
-
-//   } catch (error) {
-//     console.error("🔥 Error in /save-step API:", error);
-//     return res.status(500).json({ message: "Internal Server Error", error: error.message });
-//   }
-// });
-
-
-
-
-
-// app.get("/fetch-business-data", async (req, res) => {
-//   let { businessName, clientName } = req.query;
-
-//   if (!businessName && !clientName) {
-//     return res.status(400).json({ message: "Either businessName or clientName is required" });
-//   }
-
-//   try {
-//     // ✅ Construct dynamic query based on available parameters
-//     let query = {};
-    
-//     if (businessName) {
-//       query["AccountInformation.businessName"] = { $regex: `^${businessName}$`, $options: "i" };
-//     }
-
-//     if (clientName) {
-//       query["AccountInformation.clientName"] = { $regex: `^${clientName}$`, $options: "i" };
-//     }
-
-//     // ✅ Fetch data based on query
-//     const businessData = await FormData.find(query);
-
-//     console.log("Query Result:", businessData);
-
-//     if (!businessData.length) {
-//       return res.status(404).json({ message: "No records found for the given criteria" });
-//     }
-
-//     return res.status(200).json({ message: "Business data fetched successfully", data: businessData });
-//   } catch (error) {
-//     console.error("Error fetching business data:", error);
-//     res.status(500).json({ message: "Internal Server Error" });
-//   }
-// });
-
-
-// ✅ Update existing document (does NOT create new)
-
-
-
-
-
-
-// app.post("/save-step", async (req, res) => {
-//   const { sessionId, step, data } = req.body;
-
-//   try {
-//     if (!sessionId) {
-//       // Create New Document (Step 1)
-//       const newSessionId = uuidv4(); // Generate a unique session ID
-//       const newForm = new FormData({ sessionId: newSessionId, ...data });
-//       await newForm.save();
-//       return res
-//         .status(201)
-//         .json({ message: "Data saved", sessionId: newSessionId });
-//     } else {
-//       // Update Existing Document
-//       const updatedForm = await FormData.findOneAndUpdate(
-//         { sessionId },
-//         { $set: data },
-//         { new: true, upsert: false }
-//       );
-
-//       if (!updatedForm) {
-//         return res.status(404).json({ message: "Session ID not found" });
-//       }
-
-//       return res.status(200).json({ message: "Data updated successfully" });
-//     }
-//   } catch (error) {
-//     console.error("Error saving form data:", error);
-//     res.status(500).json({ message: "Internal Server Error" });
-//   }
-// });
-
-
-
-
-// app.get("/fetch-business-data", async (req, res) => {
-//   let { businessName, clientName } = req.query;
-
-//   if (!businessName && !clientName) {
-//     return res.status(400).json({ message: "Either businessName or clientName is required" });
-//   }
-
-//   try {
-//     // ✅ Construct dynamic query based on available parameters
-//     let query = {};
-    
-//     if (businessName) {
-//       query["AccountInformation.businessName"] = { $regex: `^${businessName}$`, $options: "i" };
-//     }
-
-//     if (clientName) {
-//       query["AccountInformation.clientName"] = { $regex: `^${clientName}$`, $options: "i" };
-//     }
-
-//     // ✅ Fetch data based on query
-//     const businessData = await FormData.find(query);
-
-//     console.log("Query Result:", businessData);
-
-//     if (!businessData.length) {
-//       return res.status(404).json({ message: "No records found for the given criteria" });
-//     }
-
-//     return res.status(200).json({ message: "Business data fetched successfully", data: businessData });
-//   } catch (error) {
-//     console.error("Error fetching business data:", error);
-//     res.status(500).json({ message: "Internal Server Error" });
-//   }
-// });
-
-
-
-
-
-// Get all client names from FormData collection
 
 
 app.get("/api/clients", async (req, res) => {
