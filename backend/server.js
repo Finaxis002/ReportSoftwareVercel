@@ -22,7 +22,6 @@ const app = express();
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 app.use(cors());
-// app.use(cors({ origin: "http://localhost:3000" }));
 // (Note: express.json() is built-in so you don't need bodyParser.json())
 
 
