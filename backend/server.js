@@ -1,4 +1,4 @@
-require("dotenv").config();  
+require("dotenv").config();  // ✅ Load environment variables at the start
 const express = require("express");
 const mongoose = require("mongoose");
 const cors = require("cors");
@@ -21,11 +21,16 @@ const app = express();
 // Middleware
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
-app.use(cors());
+// app.use(cors({ origin: "http://localhost:3000" }));
 // (Note: express.json() is built-in so you don't need bodyParser.json())
 
+app.use(bodyParser.json());
 
-console.log("✅ MongoDB URI:", process.env.MONGODB_URI);
+let storedOTP = null;
+app.use(cors());
+
+// ✅ Debug: Print the environment variable
+console.log("🔍 MongoDB URI:", process.env.MONGODB_URI);
 
 if (!process.env.MONGODB_URI) {
   console.error("❌ ERROR: MONGODB_URI is not defined. Check your .env file!");
@@ -43,6 +48,48 @@ mongoose
 
 
 
+
+  // ✅ Configure Nodemailer to send emails
+const transporter = nodemailer.createTransport({
+  service: "gmail",
+  auth: {
+    user: process.env.ADMIN_EMAIL, // Admin email
+    pass: process.env.ADMIN_EMAIL_PASSWORD, // App password
+  },
+});
+
+
+// ✅ Generate and Send OTP to Admin
+app.post("/send-otp", async (req, res) => {
+  const otp = Math.floor(100000 + Math.random() * 900000); // Generate 6-digit OTP
+  storedOTP = otp;
+
+  const mailOptions = {
+    from: process.env.ADMIN_EMAIL,
+    to: process.env.ADMIN_EMAIL, // Admin will receive OTP
+    subject: "Employee OTP Verification",
+    text: `Your OTP for PDF access is: ${otp}`,
+  };
+
+  try {
+    await transporter.sendMail(mailOptions);
+    res.json({ success: true, message: "OTP sent successfully!" });
+  } catch (error) {
+    console.error("Error sending email:", error);
+    res.status(500).json({ success: false, message: "Failed to send OTP" });
+  }
+});
+
+// ✅ Verify OTP
+app.post("/verify-otp", (req, res) => {
+  const { otp } = req.body;
+  if (parseInt(otp) === storedOTP) {
+    res.json({ success: true, message: "OTP verified!" });
+    storedOTP = null; // Reset OTP after successful verification
+  } else {
+    res.status(400).json({ success: false, message: "Invalid OTP!" });
+  }
+});
 
   // Connect to MongoDB
 // mongoose
